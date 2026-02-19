@@ -29,6 +29,8 @@ URL = "https://www.khl.ru/calendar/1288/00/29/"
 TEAM_NAME = "Сибирь"
 OUTPUT_FILE = "sibir_results_2024_25.xlsx"
 
+_SCORE_RE = re.compile(r"(\d+)\s*[:–\-]\s*(\d+)")
+
 
 def fetch_page(url: str) -> str:
     """Загрузить HTML-страницу календаря КХЛ."""
@@ -118,14 +120,13 @@ def _find_final_score(text: str) -> re.Match | None:
     (итоговый) с неравным результатом. Если все счета ничейные,
     возвращается последний найденный.
     """
-    score_re = re.compile(r"(\d+)\s*[:–\-]\s*(\d+)")
-    all_matches = list(score_re.finditer(text))
+    all_matches = list(_SCORE_RE.finditer(text))
     if not all_matches:
         return None
 
     # Предпочитаем последний счёт с неравным результатом (итоговый)
     for m in reversed(all_matches):
-        if m.group(1) != m.group(2):
+        if int(m.group(1)) != int(m.group(2)):
             return m
 
     # Все счета ничейные — вернуть последний
