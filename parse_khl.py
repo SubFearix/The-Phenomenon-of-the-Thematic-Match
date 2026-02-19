@@ -108,13 +108,37 @@ def parse_matches(html: str) -> list[dict]:
     return matches
 
 
+def _find_final_score(text: str) -> re.Match | None:
+    """
+    Найти итоговый счёт матча в тексте.
+
+    В КХЛ ничьих не бывает: при ничьей в основное время матч
+    продолжается в овертайме (ОТ) или серии буллитов (Б).
+    Если в тексте несколько счётов, возвращается последний
+    (итоговый) с неравным результатом. Если все счета ничейные,
+    возвращается последний найденный.
+    """
+    score_re = re.compile(r"(\d+)\s*[:–\-]\s*(\d+)")
+    all_matches = list(score_re.finditer(text))
+    if not all_matches:
+        return None
+
+    # Предпочитаем последний счёт с неравным результатом (итоговый)
+    for m in reversed(all_matches):
+        if m.group(1) != m.group(2):
+            return m
+
+    # Все счета ничейные — вернуть последний
+    return all_matches[-1]
+
+
 def _parse_card(card, fallback_date: str) -> dict | None:
     """Попытаться извлечь данные из HTML-карточки матча."""
 
     text = card.get_text(separator=" ", strip=True)
 
     # Ищем счёт вида «3 : 2» или «3:2» или «3 - 2»
-    score_match = re.search(r"(\d+)\s*[:–\-]\s*(\d+)", text)
+    score_match = _find_final_score(text)
     if not score_match:
         return None
 
@@ -160,7 +184,7 @@ def _parse_table_row(cols) -> dict | None:
 
     # Ищем ячейку со счётом
     for i, t in enumerate(texts):
-        score_match = re.search(r"(\d+)\s*[:–\-]\s*(\d+)", t)
+        score_match = _find_final_score(t)
         if score_match:
             score_home = int(score_match.group(1))
             score_away = int(score_match.group(2))
@@ -188,7 +212,9 @@ def _parse_text(text: str) -> list[dict]:
         r"|(\d{2}\.\d{2}\.\d{4})"
     )
     game_pattern = re.compile(
-        r"(.+?)\s+(\d+)\s*[:–\-]\s*(\d+)\s+(.+)"
+        r"(.+?)\s+(\d+)\s*[:–\-]\s*(\d+)"
+        r"(?:\s*(?:ОТ|OT|Б|SO|БУЛ)\s+(\d+)\s*[:–\-]\s*(\d+))?"
+        r"\s+(.+)"
     )
 
     for line in lines:
@@ -205,7 +231,11 @@ def _parse_text(text: str) -> list[dict]:
             home_team = gm.group(1).strip()
             score_home = int(gm.group(2))
             score_away = int(gm.group(3))
-            away_team = gm.group(4).strip()
+            # Если есть итоговый счёт после ОТ/Б, используем его
+            if gm.group(4) and gm.group(5):
+                score_home = int(gm.group(4))
+                score_away = int(gm.group(5))
+            away_team = gm.group(6).strip()
             if TEAM_NAME in home_team or TEAM_NAME in away_team:
                 match = _build_match_dict(
                     current_date, home_team, away_team, score_home, score_away
@@ -239,10 +269,8 @@ def _build_match_dict(
 
     if goals_for > goals_against:
         result = "Победа"
-    elif goals_for < goals_against:
-        result = "Поражение"
     else:
-        result = "Ничья"
+        result = "Поражение"
 
     return {
         "date": date_str,
