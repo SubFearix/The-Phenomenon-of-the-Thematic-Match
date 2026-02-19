@@ -60,7 +60,17 @@ def parse_matches(html: str) -> list[dict]:
     matches: list[dict] = []
 
     # ------------------------------------------------------------------
-    # Стратегия 1: поиск элементов-карточек матчей
+    # Стратегия 1 (основная): парсинг структуры khl.ru
+    # Сайт использует div.calendary-body__item (группа по дате) и
+    # div.card-game (карточка матча) с классами card-game__club_left,
+    # card-game__club_right, card-game__center-score-left и т.д.
+    # ------------------------------------------------------------------
+    matches = _parse_khl_calendar(soup)
+    if matches:
+        return matches
+
+    # ------------------------------------------------------------------
+    # Стратегия 2: обобщённый поиск элементов-карточек матчей
     # ------------------------------------------------------------------
     card_selectors = [
         "li[class*='game']",
@@ -90,7 +100,7 @@ def parse_matches(html: str) -> list[dict]:
             return matches
 
     # ------------------------------------------------------------------
-    # Стратегия 2: поиск таблицы с результатами
+    # Стратегия 3: поиск таблицы с результатами
     # ------------------------------------------------------------------
     tables = soup.find_all("table")
     for table in tables:
@@ -104,7 +114,7 @@ def parse_matches(html: str) -> list[dict]:
         return matches
 
     # ------------------------------------------------------------------
-    # Стратегия 3: текстовый разбор
+    # Стратегия 4: текстовый разбор
     # ------------------------------------------------------------------
     matches = _parse_text(soup.get_text(separator="\n"))
     return matches
@@ -131,6 +141,86 @@ def _find_final_score(text: str) -> re.Match | None:
 
     # Все счета ничейные — вернуть последний
     return all_matches[-1]
+
+
+def _parse_khl_calendar(soup: BeautifulSoup) -> list[dict]:
+    """
+    Парсинг календаря khl.ru с использованием реальных CSS-классов сайта.
+
+    Структура страницы:
+        div.calendary-body__item — группа матчей одного дня
+            <time> — дата
+            div.card-game — карточка матча
+                a.card-game__club_left > p — домашняя команда
+                a.card-game__club_right > p — гостевая команда
+                span.card-game__center-score-left — счёт хозяев
+                span.card-game__center-score-right — счёт гостей
+    """
+    matches: list[dict] = []
+
+    day_groups = soup.find_all("div", class_="calendary-body__item")
+    if not day_groups:
+        return matches
+
+    for day_group in day_groups:
+        # Дата из тега <time>
+        time_el = day_group.find("time")
+        date_str = time_el.get_text(strip=True) if time_el else ""
+
+        game_cards = day_group.find_all("div", class_="card-game")
+        for card in game_cards:
+            home_el = card.find(
+                "a", class_=lambda c: c and "card-game__club" in c and "left" in c
+            )
+            away_el = card.find(
+                "a", class_=lambda c: c and "card-game__club" in c and "right" in c
+            )
+            if not home_el or not away_el:
+                continue
+
+            home_team = home_el.find("p")
+            away_team = away_el.find("p")
+            if not home_team or not away_team:
+                continue
+            home_name = home_team.get_text(strip=True)
+            away_name = away_team.get_text(strip=True)
+
+            # Счёт: отдельные <span> для каждой команды
+            score_left = card.find(
+                "span",
+                class_=lambda c: c and "card-game__center-score" in c and "left" in c,
+            )
+            score_right = card.find(
+                "span",
+                class_=lambda c: c and "card-game__center-score" in c and "right" in c,
+            )
+
+            if not score_left or not score_right:
+                # Если у матча есть время начала — матч ещё не сыгран
+                if card.find("p", class_=lambda c: c and "center-time" in c):
+                    continue
+                # Попробуем найти счёт в общем тексте карточки
+                text = card.get_text(separator=" ", strip=True)
+                score_match = _find_final_score(text)
+                if not score_match:
+                    continue
+                score_home = int(score_match.group(1))
+                score_away = int(score_match.group(2))
+            else:
+                left_text = score_left.get_text(strip=True)
+                right_text = score_right.get_text(strip=True)
+                if not left_text.isdigit() or not right_text.isdigit():
+                    continue
+                score_home = int(left_text)
+                score_away = int(right_text)
+
+            match = _build_match_dict(
+                date_str, home_name, away_name, score_home, score_away
+            )
+            if match:
+                matches.append(match)
+
+    return matches
 
 
 def _parse_card(card, fallback_date: str) -> dict | None:
