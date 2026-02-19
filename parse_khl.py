@@ -237,7 +237,12 @@ def _build_match_dict(
     else:
         return None
 
-    result = "Победа" if goals_for > goals_against else "Поражение"
+    if goals_for > goals_against:
+        result = "Победа"
+    elif goals_for < goals_against:
+        result = "Поражение"
+    else:
+        result = "Ничья"
 
     return {
         "date": date_str,
